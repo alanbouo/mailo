@@ -149,6 +149,8 @@ Files are named using the pattern: `YYYY-MM-DD_Subject_MessageID.eml`
 - **Password Prompt**: Password is securely prompted if not provided via command line
 - **SSL by Default**: All connections use SSL/TLS encryption by default
 - **System Folder Skip**: Automatically skips `[Gmail]`, `Trash`, `Spam`, `Junk` folders
+- **Verify Before Delete**: Emails are only deleted from server after confirming the local file was written correctly (size verification)
+- **Partial File Cleanup**: Corrupt/partial files are automatically removed if verification fails
 - **Expunge on Delete**: Properly expunges deleted messages when using `--delete`
 
 ## Email Provider Setup

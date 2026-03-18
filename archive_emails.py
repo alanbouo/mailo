@@ -9,8 +9,10 @@ Supports Gmail, Outlook, Yahoo, and any email provider with IMAP access.
 import imaplib
 import ssl
 import email
+from email.header import decode_header
 import os
 import sys
+import time
 import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -80,10 +82,14 @@ class EmailArchiver:
         print(f"\nProcessing folder: {folder_name}")
         
         try:
-            # Select folder
-            status, _ = self.mail.select(folder_name, readonly=False)
+            # Select folder - properly quote folder names with spaces/special chars
+            # IMAP requires quotes around mailbox names containing spaces
+            quoted_folder = f'"{folder_name}"' if ' ' in folder_name else folder_name
+            status, response = self.mail.select(quoted_folder, readonly=False)
             if status != "OK":
+                error_msg = response[0].decode() if response else "Unknown error"
                 print(f"  ✗ Could not select folder: {folder_name}")
+                print(f"    Error: {error_msg}")
                 return
 
             # Build search criteria
@@ -116,13 +122,15 @@ class EmailArchiver:
                 folder_archive_path.mkdir(parents=True, exist_ok=True)
 
             # Process each email
-            for msg_id in message_ids:
+            total_emails = len(message_ids)
+            for idx, msg_id in enumerate(message_ids, 1):
                 self.stats["processed"] += 1
                 
                 try:
                     # Fetch email
                     status, msg_data = self.mail.fetch(msg_id, "(RFC822)")
                     if status != "OK":
+                        print(f"    [{idx}/{total_emails}] ✗ Failed to fetch email {msg_id.decode()}")
                         self.stats["errors"] += 1
                         continue
 
@@ -130,10 +138,33 @@ class EmailArchiver:
                     raw_email = msg_data[0][1]
                     email_message = email.message_from_bytes(raw_email)
                     
-                    # Generate filename from date and subject
-                    subject = email_message.get("Subject", "No Subject")
-                    subject = subject[:50] if subject else "No Subject"
-                    subject = "".join(c for c in subject if c.isalnum() or c in (' ', '-', '_')).strip()
+                    # Decode MIME-encoded subject header
+                    subject_raw = email_message.get("Subject", "No Subject")
+                    if subject_raw:
+                        decoded_parts = decode_header(subject_raw)
+                        subject_parts = []
+                        for part, charset in decoded_parts:
+                            if isinstance(part, bytes):
+                                try:
+                                    subject_parts.append(part.decode(charset or 'utf-8', errors='replace'))
+                                except:
+                                    subject_parts.append(part.decode('utf-8', errors='replace'))
+                            else:
+                                subject_parts.append(part)
+                        subject = ''.join(subject_parts)
+                    else:
+                        subject = "No Subject"
+                    
+                    # Sanitize subject for Windows filename
+                    # Remove invalid chars: < > : " / \ | ? * [ ]
+                    invalid_chars = '<>:"/\\|?*[]'
+                    subject_clean = ''.join(c for c in subject if c not in invalid_chars)
+                    subject_clean = subject_clean[:50].strip()
+                    if not subject_clean:
+                        subject_clean = "No_Subject"
+                    
+                    # For display (truncate to 40 chars)
+                    subject_display = subject_clean[:40] if subject_clean else "No Subject"
                     
                     date_str = email_message.get("Date", "")
                     try:
@@ -142,26 +173,48 @@ class EmailArchiver:
                     except:
                         date_prefix = datetime.now().strftime("%Y-%m-%d")
 
-                    filename = f"{date_prefix}_{subject}_{msg_id.decode()}.eml"
+                    filename = f"{date_prefix}_{subject_clean}_{msg_id.decode()}.eml"
                     filename = filename.replace(" ", "_")
                     filepath = folder_archive_path / filename
 
                     # Save email to file
+                    file_written = False
+                    file_size_mb = len(raw_email) / (1024 * 1024)
                     if not dry_run:
-                        with open(filepath, "wb") as f:
-                            f.write(raw_email)
-                        
-                        self.stats["saved_bytes"] += len(raw_email)
-                        self.stats["archived"] += 1
+                        try:
+                            with open(filepath, "wb") as f:
+                                f.write(raw_email)
+                            
+                            # Verify file was written correctly
+                            if filepath.exists() and filepath.stat().st_size == len(raw_email):
+                                file_written = True
+                                self.stats["saved_bytes"] += len(raw_email)
+                                self.stats["archived"] += 1
+                                print(f"    [{idx}/{total_emails}] ✓ {date_prefix} | {subject_display} ({file_size_mb:.2f} MB)")
+                            else:
+                                print(f"    [{idx}/{total_emails}] ✗ Verification failed: {subject_display}")
+                                self.stats["errors"] += 1
+                                # Remove partial/corrupt file if it exists
+                                if filepath.exists():
+                                    filepath.unlink()
+                        except Exception as write_error:
+                            print(f"    [{idx}/{total_emails}] ✗ Error writing: {subject_display} - {write_error}")
+                            self.stats["errors"] += 1
                     else:
-                        print(f"  [DRY RUN] Would save: {filepath}")
+                        print(f"    [{idx}/{total_emails}] [DRY RUN] Would save: {date_prefix} | {subject_display}")
 
-                    # Delete from server if requested
+                    # Delete from server if requested AND file was verified written
                     if delete_after_archive and not dry_run:
-                        self.mail.store(msg_id, "+FLAGS", "\\Deleted")
-                        self.stats["deleted"] += 1
+                        if file_written:
+                            self.mail.store(msg_id, "+FLAGS", "\\Deleted")
+                            self.stats["deleted"] += 1
+                        else:
+                            print(f"  ⚠️  Skipping deletion - file not verified: {msg_id.decode()}")
                     elif delete_after_archive and dry_run:
                         print(f"  [DRY RUN] Would delete from server: {msg_id.decode()}")
+                    
+                    # Rate limiting: small delay between emails to avoid overwhelming server
+                    time.sleep(0.1)
 
                 except Exception as e:
                     print(f"  ✗ Error processing email {msg_id.decode()}: {e}")
@@ -171,6 +224,9 @@ class EmailArchiver:
             if delete_after_archive and not dry_run:
                 self.mail.expunge()
                 print(f"  Deleted emails removed from server")
+            
+            # Rate limiting: delay between folders to avoid connection drops
+            time.sleep(0.5)
 
         except Exception as e:
             print(f"  ✗ Error processing folder {folder_name}: {e}")
