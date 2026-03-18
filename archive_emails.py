@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """
 Email Archiver Script
-Archives emails from IMAP server to local storage to reduce mailbox size.
+Archives emails from any IMAP-compatible email server to local storage.
 
-Based on configuration:
-- Email: alandji.bouorakima@netc.fr
-- IMAP Server: mail.mailo.com:993 (SSL)
-- SMTP Server: mail.mailo.com:465 (SSL)
+Supports Gmail, Outlook, Yahoo, and any email provider with IMAP access.
 """
 
 import imaplib
@@ -18,10 +15,14 @@ import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 from getpass import getpass
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 class EmailArchiver:
-    def __init__(self, email, password, imap_server="mail.mailo.com", imap_port=993, use_ssl=True):
+    def __init__(self, email, password, imap_server, imap_port=993, use_ssl=True):
         self.email = email
         self.password = password
         self.imap_server = imap_server
@@ -192,36 +193,44 @@ class EmailArchiver:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Archive emails from IMAP server to reduce mailbox storage",
+        description="Archive emails from any IMAP server to local storage",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Dry run - see what would be archived (emails older than 1 year)
-  python archive_emails.py --email alandji.bouorakima@netc.fr --days-old 365 --dry-run
+  # Using .env file (recommended)
+  python archive_emails.py --dry-run
 
-  # Archive emails older than 6 months and delete from server
-  python archive_emails.py --email alandji.bouorakima@netc.fr --days-old 180 --delete --archive-dir ~/EmailArchive
+  # Gmail - requires app password if 2FA is enabled
+  python archive_emails.py --email user@gmail.com --imap-server imap.gmail.com --days-old 365 --dry-run
 
-  # Archive specific folder only
-  python archive_emails.py --email alandji.bouorakima@netc.fr --folder "INBOX" --days-old 90
+  # Outlook/Hotmail
+  python archive_emails.py --email user@outlook.com --imap-server outlook.office365.com --days-old 180 --delete
+
+  # Yahoo Mail
+  python archive_emails.py --email user@yahoo.com --imap-server imap.mail.yahoo.com --days-old 90
+
+  # Custom IMAP server
+  python archive_emails.py --email user@example.com --imap-server mail.example.com --imap-port 993 --days-old 365
+
+For detailed IMAP settings for your provider, see README.md
         """
     )
     
-    parser.add_argument("--email", default="alandji.bouorakima@netc.fr",
-                        help="Email address (default: alandji.bouorakima@netc.fr)")
+    parser.add_argument("--email", default=os.getenv("EMAIL_ADDRESS"),
+                        help="Email address (or set EMAIL_ADDRESS in .env)")
     parser.add_argument("--password", 
-                        help="Email password (if not provided, will prompt securely)")
-    parser.add_argument("--imap-server", default="mail.mailo.com",
-                        help="IMAP server (default: mail.mailo.com)")
-    parser.add_argument("--imap-port", type=int, default=993,
-                        help="IMAP port (default: 993 for SSL)")
+                        help="Email password (or set EMAIL_PASSWORD in .env, or will prompt securely)")
+    parser.add_argument("--imap-server", default=os.getenv("IMAP_SERVER"),
+                        help="IMAP server hostname (or set IMAP_SERVER in .env)")
+    parser.add_argument("--imap-port", type=int, default=int(os.getenv("IMAP_PORT", 993)),
+                        help="IMAP port (default: 993, or set IMAP_PORT in .env)")
     parser.add_argument("--no-ssl", action="store_true",
                         help="Don't use SSL (not recommended)")
-    parser.add_argument("--days-old", type=int, default=365,
+    parser.add_argument("--days-old", type=int, default=int(os.getenv("DAYS_OLD", 365)),
                         help="Archive emails older than N days (default: 365)")
     parser.add_argument("--folder",
-                        help="Specific folder to archive (default: all folders)")
-    parser.add_argument("--archive-dir", default="./EmailArchive",
+                        help="Specific folder to archive (default: all folders except system)")
+    parser.add_argument("--archive-dir", default=os.getenv("ARCHIVE_DIR", "./EmailArchive"),
                         help="Directory to save archived emails (default: ./EmailArchive)")
     parser.add_argument("--delete", action="store_true",
                         help="Delete emails from server after archiving (DANGEROUS!)")
@@ -232,8 +241,21 @@ Examples:
 
     args = parser.parse_args()
 
-    # Get password if not provided
-    password = args.password
+    # Validate required parameters
+    if not args.email:
+        print("Error: Email address is required. Provide via --email or EMAIL_ADDRESS in .env file.")
+        sys.exit(1)
+    
+    if not args.imap_server:
+        print("Error: IMAP server is required. Provide via --imap-server or IMAP_SERVER in .env file.")
+        print("\nCommon IMAP servers:")
+        print("  Gmail:          imap.gmail.com")
+        print("  Outlook/365:    outlook.office365.com")
+        print("  Yahoo Mail:     imap.mail.yahoo.com")
+        sys.exit(1)
+
+    # Get password from args, env var, or prompt
+    password = args.password or os.getenv("EMAIL_PASSWORD")
     if not password:
         password = getpass(f"Enter password for {args.email}: ")
 
