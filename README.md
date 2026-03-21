@@ -167,6 +167,7 @@ Files are named using the pattern: `YYYY-MM-DD_Subject_MessageID.eml`
 - **SSL**: Yes
 - **Notes**: If you have MFA enabled, use an [App Password](https://account.live.com/proofs/AppPassword).
 
+
 ### Yahoo Mail
 - **IMAP Server**: `imap.mail.yahoo.com`
 - **Port**: `993`

@@ -177,6 +177,12 @@ class EmailArchiver:
                     filename = filename.replace(" ", "_")
                     filepath = folder_archive_path / filename
 
+                    # Skip if already archived
+                    if filepath.exists():
+                        self.stats["processed"] += 1
+                        print(f"    [{idx}/{total_emails}] ⏭ Skipped (already archived): {subject_display}")
+                        continue
+
                     # Save email to file
                     file_written = False
                     file_size_mb = len(raw_email) / (1024 * 1024)
